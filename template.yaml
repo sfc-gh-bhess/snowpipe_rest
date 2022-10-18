@@ -1,0 +1,180 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: This stack deploys a REST API writing to Snowflake table via Snowpipe Streaming
+
+Parameters:
+  Prefix:
+    Type: String
+    Description: Prefix for resources
+    
+  SnowflakeSecret:
+    Type: String
+    Description: ARN of Secrets Manager secret for Snowpipe Streaming
+
+  APIUsername:
+    Type: String
+    Description: Username to allow access to the API
+    
+  APIPassword:
+    Type: String
+    Description: Password to allow access to the API
+    NoEcho: true
+    MinLength: 4
+
+Resources:
+# IAM
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSLambdaExecute
+      Policies:
+        - PolicyName: SnowflakeSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref SnowflakeSecret
+      RoleName: !Sub ${Prefix}-Role-Lambda
+
+# Lambda
+  LambdaFunctionSnowpipeRest: 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${Prefix}-snowpipe-rest
+      CodeUri: snowpipe_rest/
+      Handler: snowpipe_rest.SnowpipeRestHandler::handleRequest
+      Runtime: java11
+      Environment:
+        Variables:
+          SNOWFLAKE_SECRET: !Ref SnowflakeSecret
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 512
+
+  LambdaPermissionSnowpipeRest:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaFunctionSnowpipeRest.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: 
+        !Join
+          - ''
+          - - 'arn:aws:execute-api:'
+            - !Ref AWS::Region
+            - ':'
+            - !Ref AWS::AccountId
+            - ':'
+            - !Ref APISnowpipeRest
+            - '/*/*/*'
+
+  LambdaBasicAuthFunction: 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${Prefix}-BasicAuth
+      Handler: auth.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.8
+      Environment:
+        Variables:
+          USERNAME: !Ref APIUsername
+          PASSWORD: !Ref APIPassword
+      CodeUri: rest_auth/
+      Timeout: 5
+
+  LambdaPermissionAPIBasicAuth:
+    DependsOn: LambdaBasicAuthFunction
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaBasicAuthFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: 
+        !Join
+          - ''
+          - - 'arn:aws:execute-api:'
+            - !Ref AWS::Region
+            - ':'
+            - !Ref AWS::AccountId
+            - ':'
+            - !Ref APISnowpipeRest
+            - '/*/*'
+
+# API Gateway
+  APISnowpipeRest:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Sub ${Prefix}
+      CorsConfiguration:
+        AllowOrigins: 
+          - '*'
+        AllowHeaders: 
+          - Content-Type
+          - Authorization
+        AllowMethods: 
+          - PUT
+          - OPTIONS
+      DefinitionBody: 
+        openapi: "3.0.1"
+        info:
+          title: !Sub ${Prefix}
+        paths:
+          /snowpipe/{database}/{schema}/{table}:
+            put:
+              responses:
+                default:
+                  description: "Default response"
+              security:
+              - auth: []
+              x-amazon-apigateway-integration:
+                payloadFormatVersion: "1.0"
+                type: "aws_proxy"
+                httpMethod: "POST"
+                uri: 
+                  !Join
+                    - ''
+                    - - 'arn:aws:apigateway:'
+                      - !Ref AWS::Region
+                      - ':lambda:path/2015-03-31/functions/'
+                      - !GetAtt LambdaFunctionSnowpipeRest.Arn
+                      - '/invocations'
+                connectionType: "INTERNET"
+        components:
+          securitySchemes:
+            auth:
+              type: "apiKey"
+              name: "Authorization"
+              in: "header"
+              x-amazon-apigateway-authorizer:
+                identitySource: "$request.header.Authorization"
+                authorizerUri: 
+                  !Join
+                    - ''
+                    - - 'arn:aws:apigateway:'
+                      - !Ref AWS::Region
+                      - ':lambda:path/2015-03-31/functions/'
+                      - !GetAtt LambdaBasicAuthFunction.Arn
+                      - '/invocations'
+                authorizerPayloadFormatVersion: "2.0"
+                authorizerResultTtlInSeconds: 300
+                type: "request"
+                enableSimpleResponses: false
+
+
+Outputs:
+  APIRoot:
+    Value: !Sub https://${APISnowpipeRest}.execute-api.${AWS::Region}.amazonaws.com/${Prefix}/snowpipe/
