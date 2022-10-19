@@ -45,6 +45,16 @@ The secret needs 4 fields:
 * `user` - the Snowflake user in that account that has been granted the `role`
 * `private_key` - the SSH private key associated with the `user` (single line, without header)
 
+The JSON value of the secret should look like the following (with your values substituted):
+```
+{
+    "url": "<SNOWFLAKE URL>",
+    "role": "<SNOWFLAKE ROLE>",
+    "user": "<SNOWFLAKE USER>",
+    "private_key": "<SNOWFLAKE PRIVATE KEY>"
+}
+```
+
 # Creating the API in AWS
 The stack will create the following resources:
 * An IAM role for the Lambda functions to run that have access to the secret for Snowflake access
