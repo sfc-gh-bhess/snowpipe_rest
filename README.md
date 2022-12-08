@@ -108,7 +108,7 @@ In order to use the API, you can issue PUT commands to
 For example, to put the simple `{"a": 1, "b": "one"}` row into the `mydb.myschema.mytable`
 table using `curl`, you could do:
 ```
-curl -X PUT -u myuser:mypwd -H "Content-Type: application/json" -d '[{"a": 1, "b": "one"}]' "https://ABCDEFG.execute-api.us-west-2.amazonaws.com/mystack/snowpipe/mydb/myschema/myuser"
+curl -X PUT -u myuser:mypwd -H "Content-Type: application/json" -d '[{"a": 1, "b": "one"}]' "https://ABCDEFG.execute-api.us-west-2.amazonaws.com/mystack/snowpipe/mydb/myschema/mytable"
 ```
 
 Where the output of the AWS SAM deploy command is `https://ABCDEFG.execute-api.us-west-2.amazonaws.com/mystack/snowpipe/`
