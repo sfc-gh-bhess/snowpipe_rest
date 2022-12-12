@@ -31,7 +31,7 @@ I will indicate with `java11`). You need to specify a few parameters to run:
 * `snowflake.url` - the HTTPS URL for your Snowflake account (e.g., `https://myacct.snowflakecomputing.com`)
 * `snowflake.user` - the Snowflake user that the application should use
 * `snowflake.role` - the role for the Snowflake user that the application should use
-* `snowflake.private_key` - the SSH private key for the Snowflake user
+* `snowflake.private_key` - the SSH private key for the Snowflake user; this should be the private PEM file minus the header and footer and on one line (CR/LF removed).
 
 From the commandline run:
 ```
@@ -39,7 +39,7 @@ java11 -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar \
   --snowflake.url="<SNOWFLAKE URL>" \
   --snowflake.user="<SNOWFLAKE USER>" \
   --snowflake.role="<SNOWFLAKE ROLE>" \
-  --snowflake.private_key="<SNOWFLAKE PRIVATE KEY>"
+  --snowflake.private_key="<SNOWFLAKE PRIVATE KEY (as a single line)>"
 ```
 
 Alternatively, you can edit the `src/main/resources/application.properties` and add
@@ -50,14 +50,16 @@ If you want to build a Docker container for this application, you can run
 `make docker` which builds specifically for the `linux/amd64` platform. If 
 you want to make the Docker image for the local platform, run `make docker_native`.
 
-To run the Docker container locally, you can run:
+To run the Docker image (here named `snowpiperest`) locally, you can run:
 ```
-docker run -p 8080:8080 \
+docker run -p 8080:8080 snowpiperest \
   --snowflake.url="<SNOWFLAKE URL>" \
   --snowflake.user="<SNOWFLAKE USER>" \
   --snowflake.role="<SNOWFLAKE ROLE>" \
-  --snowflake.private_key="<SNOWFLAKE PRIVATE KEY>"
+  --snowflake.private_key="<SNOWFLAKE PRIVATE KEY (as a single line)>"
 ```
+
+Note, see above for the parameters.
 
 ## Test the API
 
