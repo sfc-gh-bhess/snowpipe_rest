@@ -18,6 +18,10 @@ write to the specified table, a `404` error is returned. If the data is
 incorrectly formatted, a `400` error is returned.
 
 # Instructions
+Before starting, you will need a Snowflake user with access to a warehouse
+and permissions on the table(s) that you want to write to. You will also 
+need an SSH Key for your Snowflake user (see [here](https://docs.snowflake.com/en/user-guide/key-pair-auth.html))
+
 This example is driven from the Makefile. The Makefile has variables at the top
 that can be overriden by either editing the Makefile or setting the variable(s) in
 the Linux environment.
