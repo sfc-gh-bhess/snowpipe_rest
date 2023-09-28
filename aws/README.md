@@ -2,10 +2,6 @@
 This repository is an example of how to build a REST API in AWS for
 Snowflake's Snowpipe Streaming.
 
-Note: at this point (October 18, 2022), Snowpipe Streaming is still in 
-Private Preview. In order to test this example you must have Snowpipe
-Streaming enabled in your Snowflake account.
-
 The purpose is to allow for applications to put data to a REST endpoint
 and that data will be loaded into Snowflake in a low-latency fashion (versus
 using batch/bulk load methods). This is not always the best way to load data
