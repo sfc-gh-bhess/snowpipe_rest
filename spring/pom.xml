@@ -48,13 +48,8 @@
         <!-- Snowflake -->
         <dependency>
             <groupId>net.snowflake</groupId>
-            <artifactId>snowflake-jdbc</artifactId>
-            <version>3.13.25</version>
-        </dependency>
-        <dependency>
-            <groupId>net.snowflake</groupId>
             <artifactId>snowflake-ingest-sdk</artifactId>
-            <version>1.0.2-beta.5</version>
+            <version>2.0.3</version>
         </dependency>
 	</dependencies>
 

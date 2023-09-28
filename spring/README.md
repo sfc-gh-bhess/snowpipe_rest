@@ -30,8 +30,8 @@ To build the application, run `make build`. At this point you can run the
 application locally.
 
 ## Running Locally
-To run the application locally, you will need to run with Java v11 (which
-I will indicate with `java11`). You need to specify a few parameters to run:
+To run the application locally, you will need to run with Java. 
+You need to specify a few parameters to run:
 * `snowflake.url` - the HTTPS URL for your Snowflake account (e.g., `https://myacct.snowflakecomputing.com`)
 * `snowflake.user` - the Snowflake user that the application should use
 * `snowflake.role` - the role for the Snowflake user that the application should use
@@ -39,7 +39,7 @@ I will indicate with `java11`). You need to specify a few parameters to run:
 
 From the commandline run:
 ```
-java11 -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar \
+java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar \
   --snowflake.url="<SNOWFLAKE URL>" \
   --snowflake.user="<SNOWFLAKE USER>" \
   --snowflake.role="<SNOWFLAKE ROLE>" \
@@ -47,7 +47,7 @@ java11 -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar \
 ```
 
 Alternatively, you can edit the `src/main/resources/application.properties` and add
-your parameters there. Then you can just run `java11 -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar`.
+your parameters there. Then you can just run `java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar`.
 
 ## Running with Docker
 If you want to build a Docker container for this application, you can run
