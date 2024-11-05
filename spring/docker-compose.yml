@@ -1,0 +1,11 @@
+services:
+    snowpipe:
+        build: .
+        ports:
+            - 8080:8080
+        environment:
+          - SERVER_PORT=8080
+          - SNOWFLAKE_URL=${SNOWFLAKE_URL}
+          - SNOWFLAKE_USER=${SNOWFLAKE_USER}
+          - SNOWFLAKE_ROLE=${SNOWFLAKE_ROLE}
+          - SNOWFLAKE_PRIVATE_KEY=${SNOWFLAKE_PRIVATE_KEY}

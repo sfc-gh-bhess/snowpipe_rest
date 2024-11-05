@@ -9,7 +9,7 @@ There is one endpoint:
 The data is sent in the body of the `PUT` request. The data is a JSON array
 of JSON objects. For example:
 
-```
+```json
 [{"some_int": 1, "some_string": "one"}, {"some_int": 2, "some_string": "two"}]
 ```
 
@@ -37,8 +37,14 @@ You need to specify a few parameters to run:
 * `snowflake.role` - the role for the Snowflake user that the application should use
 * `snowflake.private_key` - the SSH private key for the Snowflake user; this should be the private PEM file minus the header and footer and on one line (CR/LF removed).
 
+You can set these by environment variable, as well:
+* `SNOWFLAKE_URL` for `snowflake.url`
+* `SNOWFLAKE_USER` for `snowflake.user`
+* `SNOWFLAKE_ROLE` for `snowflake.role`
+* `SNOWFLAKE_PRIVATE_KEY` for `snowflake.private_key`
+
 From the commandline run:
-```
+```bash
 java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar \
   --snowflake.url="<SNOWFLAKE URL>" \
   --snowflake.user="<SNOWFLAKE USER>" \
@@ -49,13 +55,19 @@ java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar \
 Alternatively, you can edit the `src/main/resources/application.properties` and add
 your parameters there. Then you can just run `java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar`.
 
+Additionally, set the proper environment variables and run:
+```bash
+java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar
+```
+
 ## Running with Docker
 If you want to build a Docker container for this application, you can run
-`make docker` which builds specifically for the `linux/amd64` platform. If 
-you want to make the Docker image for the local platform, run `make docker_native`.
+`make docker` which builds for the local platform.
+If you want to make the Docker image specifically for the `linux/amd64` platform, 
+run `make docker_amd64`.
 
 To run the Docker image (here named `snowpiperest`) locally, you can run:
-```
+```bash
 docker run -p 8080:8080 snowpiperest \
   --snowflake.url="<SNOWFLAKE URL>" \
   --snowflake.user="<SNOWFLAKE USER>" \
@@ -64,6 +76,22 @@ docker run -p 8080:8080 snowpiperest \
 ```
 
 Note, see above for the parameters.
+
+If you set the environment variables, you can also run
+```bash
+docker run -p 8080:8080 --env-file env.list snowpiperest
+```
+
+Alternatively, if you set the envrionment variables, you can 
+also run the Docker image using Docker Compose:
+```bash
+docker compose up
+```
+
+Or use the `run` target in the Makefile (which uses Docker Compose):
+```bash
+make run
+```
 
 ## Test the API
 

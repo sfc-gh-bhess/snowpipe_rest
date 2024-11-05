@@ -13,18 +13,21 @@ import net.snowflake.ingest.streaming.SnowflakeStreamingIngestClientFactory;
 
 import java.util.Map;
 import java.util.List;
-import java.util.ArrayList;
 import java.util.Properties;
 import java.util.HashMap;
 import java.util.UUID;
 
 import javax.annotation.PostConstruct;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
 public class SnowpipeRestRepository {
+    Logger logger = LoggerFactory.getLogger(SnowpipeRestRepository.class);
+    
     private ObjectMapper objectMapper = new ObjectMapper();
     private SnowflakeStreamingIngestClient snowpipe_client;
     private Map<String, SnowflakeStreamingIngestChannel> snowpipe_channels = new HashMap<String, SnowflakeStreamingIngestChannel>();
@@ -126,24 +129,6 @@ public class SnowpipeRestRepository {
         InsertValidationResponse resp = channel.insertRows(rows, new_token);
         this.insert_count.put(insert_count_key, insert_count);
 
-        int maxRetries = 20;
-        int retryCount = 0;
-        do {
-            String offsetTokenFromSnowflake = channel.getLatestCommittedOffsetToken();
-            if (offsetTokenFromSnowflake != null
-                    && offsetTokenFromSnowflake.equals(new_token)) {
-                System.out.println("SUCCESSFULLY inserted");
-                break;
-            } else {
-                try {
-                    Thread.sleep(1000);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-            retryCount++;
-        } while (retryCount < maxRetries);
-
         // Make response
         try {
             SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(rows.size(), rows.size() - resp.getErrorRowCount(), resp.getErrorRowCount());
@@ -151,100 +136,10 @@ public class SnowpipeRestRepository {
                 int idx = (int)insertError.getRowIndex();
                 sp_resp.addError(idx, objectMapper.writeValueAsString(rowStrings.get(idx)), insertError.getMessage());
             }
-
-            this.insert_count.put(insert_count_key, insert_count);
             return sp_resp;
         }
         catch (JsonProcessingException je) {
             throw new RuntimeException(je);
         }
     }
-
-    public class SnowpipeInsertError {
-        public int row_index;
-        public String input;
-        public String error;
-
-        public SnowpipeInsertError(int row_index, String input, String error) {
-            this.row_index = row_index;
-            this.input = input;
-            this.error = error;
-        }
-
-        public int getRow_index() {
-            return this.row_index;
-        }
-
-        public String getInput() {
-            return this.input;
-        }
-
-        public String getError() {
-            return this.error;
-        }
-
-        public String toString() {
-            return String.format("{\"row_index\": \"%s\", \"input\": \"%s\", \"error\": \"%s\"}", this.row_index, this.input, this.error);
-        }
-    }
-
-    public class SnowpipeInsertResponse {
-        int num_attempted;
-        int num_succeeded;
-        int num_errors;
-        List<SnowpipeInsertError> errors;
-
-        public SnowpipeInsertResponse(int num_attempted, int num_succeeded, int num_errors) {
-            this(num_attempted, num_succeeded, num_errors, new ArrayList<SnowpipeInsertError>());
-        }
-
-        public SnowpipeInsertResponse(int num_attempted, int num_succeeded, int num_errors, List<SnowpipeInsertError> errors) {
-            this.num_attempted = num_attempted;
-            this.num_succeeded = num_succeeded;
-            this.num_errors = num_errors;
-            this.errors = errors;
-        }
-
-        public int getNum_attempted() {
-            return this.num_attempted;
-        }
-
-        public int getNum_succeeded() {
-            return this.num_succeeded;
-        }
-
-        public int getNum_errors() {
-            return this.num_errors;
-        }
-
-        public List<SnowpipeInsertError> getErrors() {
-            return this.errors;
-        }
-
-        public SnowpipeInsertResponse addError(int row_index, String input, String error) {
-            return this.addError(new SnowpipeInsertError(row_index, input, error));
-        }
-
-        public SnowpipeInsertResponse addError(SnowpipeInsertError e) {
-            errors.add(e);
-            return this;
-        }
-
-        public String toString() {
-            StringBuffer resp_body = new StringBuffer("{\n");
-            resp_body.append(String.format(
-                    "  \"inserts_attempted\": %d,\n  \"inserts_succeeded\": %d,\n  \"insert_errors\": %d,\n",
-                    this.num_attempted, this.num_succeeded, this.num_errors));
-            resp_body.append("  \"error_rows\":\n    [");
-            String delim = " ";
-            for (SnowpipeInsertError e: this.errors) {
-                resp_body.append(String.format("\n    %s %s", delim, e.toString()));
-                delim = ",";
-            }
-            resp_body.append("\n    ]");
-            resp_body.append("\n}");
-            return resp_body.toString();
-        }
-    }
-
 }
