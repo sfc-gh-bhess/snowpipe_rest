@@ -32,6 +32,24 @@ public class SnowpipeInsertResponse {
         return num_errors;
     }
 
+    public void setNum_attempted(int n) {
+        this.num_attempted = n;
+    }
+
+    public void setNum_succeeded(int n) {
+        this.num_succeeded = n;
+    }
+
+    public void setNum_errors(int n) {
+        this.num_errors = n;
+    }
+
+    public void add_metrics(int n_attempted, int n_succeeded, int n_errors) {
+        this.num_attempted += n_attempted;
+        this.num_succeeded += n_succeeded;
+        this.num_errors += n_errors;
+    }
+
     public List<SnowpipeInsertError> getErrors() {
         return errors;
     }

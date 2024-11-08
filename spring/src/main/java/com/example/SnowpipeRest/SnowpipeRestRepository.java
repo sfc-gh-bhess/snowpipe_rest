@@ -17,6 +17,8 @@ import java.util.Properties;
 import java.util.HashMap;
 import java.util.UUID;
 
+import com.google.common.collect.Lists;
+
 import javax.annotation.PostConstruct;
 
 import org.slf4j.Logger;
@@ -33,6 +35,7 @@ public class SnowpipeRestRepository {
     private Map<String, SnowflakeStreamingIngestChannel> snowpipe_channels = new HashMap<String, SnowflakeStreamingIngestChannel>();
     private Map<String, Integer> insert_count = new HashMap<String, Integer>();
     private String suffix = UUID.randomUUID().toString();
+    private int batch_size = 144;
 
     @Value("${snowflake.url}")
     private String snowflake_url;
@@ -122,24 +125,29 @@ public class SnowpipeRestRepository {
         SnowflakeStreamingIngestChannel channel = this.getIngestChannel(database, schema, table);
         String insert_count_key = makeKey(database, schema, table);
         int insert_count = this.insert_count.get(insert_count_key);
-        insert_count++;
 
         // Issue the insert
-        String new_token = String.valueOf(insert_count);
-        InsertValidationResponse resp = channel.insertRows(rows, new_token);
-        this.insert_count.put(insert_count_key, insert_count);
+        List<List<Map<String,Object>>> batches = Lists.partition(rows, batch_size);
+        List<List<Object>> batchStrings = Lists.partition(rowStrings, batch_size);
+        SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(0, 0, 0);
+        for (int i = 0; i < batches.size(); i++) {
+            insert_count++;
+            String new_token = String.valueOf(insert_count);
+            InsertValidationResponse resp = channel.insertRows(batches.get(i), new_token);
+            this.insert_count.put(insert_count_key, insert_count);
 
-        // Make response
-        try {
-            SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(rows.size(), rows.size() - resp.getErrorRowCount(), resp.getErrorRowCount());
+            // Make response
+            sp_resp.add_metrics(rows.size(), rows.size() - resp.getErrorRowCount(), resp.getErrorRowCount());
             for (InsertValidationResponse.InsertError insertError : resp.getInsertErrors()) {
                 int idx = (int)insertError.getRowIndex();
-                sp_resp.addError(idx, objectMapper.writeValueAsString(rowStrings.get(idx)), insertError.getMessage());
+                try {
+                    sp_resp.addError(idx, objectMapper.writeValueAsString(batchStrings.get(idx)), insertError.getMessage());
+                }
+                catch (JsonProcessingException je) {
+                    throw new RuntimeException(je);
+                }    
             }
-            return sp_resp;
         }
-        catch (JsonProcessingException je) {
-            throw new RuntimeException(je);
-        }
+        return sp_resp;
     }
 }
