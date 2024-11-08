@@ -60,6 +60,11 @@ Additionally, set the proper environment variables and run:
 java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar
 ```
 
+Additionally, if a payload includes too many rows to insert, we will batch
+the rows into smaller batches. There is a parameter to adjust the batchsize,
+`snowpiperest.batch_size`, which defaults to `144`. You can also set it via an
+environment variable named `SNOWPIPEREST_BATCH_SIZE`.
+
 ## Running with Docker
 If you want to build a Docker container for this application, you can run
 `make docker` which builds for the local platform.

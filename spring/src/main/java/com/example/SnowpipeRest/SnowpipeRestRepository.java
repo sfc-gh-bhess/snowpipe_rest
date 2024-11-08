@@ -35,7 +35,9 @@ public class SnowpipeRestRepository {
     private Map<String, SnowflakeStreamingIngestChannel> snowpipe_channels = new HashMap<String, SnowflakeStreamingIngestChannel>();
     private Map<String, Integer> insert_count = new HashMap<String, Integer>();
     private String suffix = UUID.randomUUID().toString();
-    private int batch_size = 144;
+
+    @Value("${snowpiperest.batch_size}")
+    private int batch_size;
 
     @Value("${snowflake.url}")
     private String snowflake_url;
