@@ -148,7 +148,7 @@ public class SnowpipeRestRepository {
         }
 
         // Get ingest channel
-        // SnowflakeStreamingIngestChannel channel = this.getIngestChannel(database, schema, table);
+        this.getIngestChannel(database, schema, table); // Need to get the channel so the buffer and count are created
         ConcurrentHashMap<String,List<Map<String,Object>>> buff = this.buffers.get(makeKey(database, schema, table));
         String insert_count_key = makeKey(database, schema, table);
         int insert_count = this.insert_count.get(insert_count_key);
