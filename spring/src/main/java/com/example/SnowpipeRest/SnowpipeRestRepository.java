@@ -15,12 +15,14 @@ import net.snowflake.ingest.utils.SFException;
 import java.util.Map;
 import java.util.List;
 import java.util.Properties;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.UUID;
+import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
 
 import com.google.common.collect.Lists;
@@ -40,12 +42,17 @@ public class SnowpipeRestRepository {
     private SnowflakeStreamingIngestClient snowpipe_client;
     private Map<String, SnowflakeStreamingIngestChannel> snowpipe_channels = new HashMap<String, SnowflakeStreamingIngestChannel>();
     private Map<String, Integer> insert_count = new HashMap<String, Integer>();
-    private Map<String, ConcurrentHashMap<String,List<Map<String,Object>>>> buffers = new HashMap<String,ConcurrentHashMap<String,List<Map<String,Object>>>>();
+    // private Map<String, ConcurrentHashMap<String,List<Map<String,Object>>>> buffers = new HashMap<String,ConcurrentHashMap<String,List<Map<String,Object>>>>();
+    private Map<String, Map<String,List<Map<String,Object>>>> buffers = new HashMap<String,Map<String,List<Map<String,Object>>>>();
     private String suffix = UUID.randomUUID().toString();
-    private ExecutorService executorService = Executors.newFixedThreadPool(1);
+    // private ExecutorService executorService = Executors.newFixedThreadPool(1);
+    private Map<String, CompletableFuture<Void>> purgers = new HashMap<String, CompletableFuture<Void>>();
 
     @Value("${snowpiperest.batch_size}")
     private int batch_size;
+
+    @Value("${snowpiperest.purge_rate}")
+    private int purge_rate;
 
     @Value("${snowflake.url}")
     private String snowflake_url;
@@ -107,6 +114,12 @@ public class SnowpipeRestRepository {
             this.insert_count.put(key, 0);
             if (!this.buffers.containsKey(key))
                 this.buffers.put(key, new ConcurrentHashMap<String,List<Map<String,Object>>>());
+                // this.buffers.put(key, new HashMap<String,List<Map<String,Object>>>());
+
+            if (this.purgers.containsKey(key))
+                this.purgers.get(key).cancel(true);
+            this.purgers.put(key, CompletableFuture.runAsync(() -> purger(key)));
+
             return channel;
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
@@ -118,6 +131,7 @@ public class SnowpipeRestRepository {
 
     private SnowflakeStreamingIngestChannel makeChannelValid(String database, String schema, String table) {
         String key = makeKey(database, schema, table);
+        logger.info(String.format("Making channel valid: %s", key));
         if (this.snowpipe_channels.containsKey(key)) {
             SnowflakeStreamingIngestChannel channel = this.snowpipe_channels.get(key);
             if (channel.isValid())
@@ -149,7 +163,7 @@ public class SnowpipeRestRepository {
 
         // Get ingest channel
         this.getIngestChannel(database, schema, table); // Need to get the channel so the buffer and count are created
-        ConcurrentHashMap<String,List<Map<String,Object>>> buff = this.buffers.get(makeKey(database, schema, table));
+        Map<String,List<Map<String,Object>>> buff = this.buffers.get(makeKey(database, schema, table));
         String insert_count_key = makeKey(database, schema, table);
         int insert_count = this.insert_count.get(insert_count_key);
 
@@ -170,24 +184,29 @@ public class SnowpipeRestRepository {
             for (InsertValidationResponse.InsertError insertError : resp.getInsertErrors()) {
                 int idx = (int)insertError.getRowIndex();
                 try {
-                    sp_resp.addError(idx, objectMapper.writeValueAsString(batchStrings.get(idx)), insertError.getMessage());
+                    sp_resp.addError(idx, objectMapper.writeValueAsString(batchStrings.get(i).get(idx)), insertError.getMessage());
                 }
                 catch (JsonProcessingException je) {
                     throw new RuntimeException(je);
                 }    
             }
         }
-        if (((ThreadPoolExecutor)(this.executorService)).getQueue().size() == 0)
-            this.executorService.submit(() -> {
-                freePlayed(insert_count_key);
-            });
+        // if (((ThreadPoolExecutor)(this.executorService)).getQueue().size() == 0) {
+        //     logger.info(String.format("Starting freePlayed thread: %d", ((ThreadPoolExecutor)(this.executorService)).getQueue().size()));
+        //     this.executorService.submit(() -> {
+        //         freePlayed(insert_count_key);
+        //     });
+        // }
+        // else {
+        //     logger.info(String.format("Someone else is on it"));
+        // }
         return sp_resp;
     }
 
     private InsertValidationResponse insertRows(List<Map<String,Object>> batch, String new_token, 
                                                 String database, String schema, String table) {
         SnowflakeStreamingIngestChannel channel = this.getIngestChannel(database, schema, table);
-        // ConcurrentHashMap<String,List<Map<String,Object>>> buff = this.buffers.get(makeKey(database, schema, table));
+        // Map<String,List<Map<String,Object>>> buff = this.buffers.get(makeKey(database, schema, table));
         InsertValidationResponse resp;
         try {
             resp = channel.insertRows(batch, new_token);
@@ -200,23 +219,48 @@ public class SnowpipeRestRepository {
         return resp;
     }
 
+    private void purger(String key) {
+        try {
+            while (true) {
+                freePlayed(key);
+                Thread.sleep(this.purge_rate);
+            }
+        }        
+        catch (Exception e) {
+            return;
+        }
+    }
+
     private void freePlayed(String key) {
         SnowflakeStreamingIngestChannel channel = this.snowpipe_channels.get(key);
-        int last_token = Integer.parseInt(channel.getLatestCommittedOffsetToken());
-        ConcurrentHashMap<String,List<Map<String,Object>>> buff = this.buffers.get(key);
-        for (String k : buff.keySet()) {
-            if (Integer.parseInt(k) <= last_token)
+        String last_token_str = channel.getLatestCommittedOffsetToken();
+        int last_token = -1;
+        if (null == last_token_str)
+            return;
+        try {
+            last_token = Integer.parseInt(last_token_str);
+        }
+        catch (Exception e) {
+            logger.info(String.format("XXXX: %s", e.getMessage()));
+        }
+        Map<String,List<Map<String,Object>>> buff = this.buffers.get(key);
+        int ttoken = last_token;
+        List<String> keys = buff.keySet().stream().filter(k -> Integer.parseInt(k) <= ttoken).toList();
+        if (keys.size() > 0) {
+            logger.info(String.format("Purging from %s: %s", key, keys));
+            for (String k : keys) {
                 buff.remove(k);
+            }
         }
     }
 
     private void replayBuffer(String database, String schema, String table) {
         String key = makeKey(database, schema, table);
+        logger.info(String.format("Replaying buffer: %s", key));
         freePlayed(key);
         // SnowflakeStreamingIngestChannel channel = this.snowpipe_channels.get(key);
-        ConcurrentHashMap<String,List<Map<String,Object>>> buff = this.buffers.get(key);
-        List<Integer> tokens = Collections.list(buff.keys()).stream().map(e -> Integer.parseInt(e)).toList();
-        Collections.sort(tokens);
+        Map<String,List<Map<String,Object>>> buff = this.buffers.get(key);
+        List<Integer> tokens = buff.keySet().stream().map(e -> Integer.parseInt(e)).sorted().toList();
         for (Integer t : tokens) {
             String token = String.valueOf(t);
             try {
