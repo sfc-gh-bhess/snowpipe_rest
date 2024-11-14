@@ -103,6 +103,8 @@ public class SnowpipeRestRepository {
             return this.snowpipe_channels.get(key);
 
         try {
+            if (this.purgers.containsKey(key))
+                this.purgers.get(key).cancel(true);
             OpenChannelRequest request1 = OpenChannelRequest.builder("SNOWPIPE_REST_CHANNEL_" + this.suffix)
                     .setDBName(database)
                     .setSchemaName(schema)
@@ -116,8 +118,6 @@ public class SnowpipeRestRepository {
                 this.buffers.put(key, new ConcurrentHashMap<String,List<Map<String,Object>>>());
                 // this.buffers.put(key, new HashMap<String,List<Map<String,Object>>>());
 
-            if (this.purgers.containsKey(key))
-                this.purgers.get(key).cancel(true);
             this.purgers.put(key, CompletableFuture.runAsync(() -> purger(key)));
 
             return channel;
