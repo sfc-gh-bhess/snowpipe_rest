@@ -10,6 +10,7 @@ import net.snowflake.ingest.streaming.OpenChannelRequest;
 import net.snowflake.ingest.streaming.SnowflakeStreamingIngestChannel;
 import net.snowflake.ingest.streaming.SnowflakeStreamingIngestClient;
 import net.snowflake.ingest.streaming.SnowflakeStreamingIngestClientFactory;
+import net.snowflake.ingest.utils.ParameterProvider;
 import net.snowflake.ingest.utils.SFException;
 
 import java.util.Map;
@@ -54,6 +55,9 @@ public class SnowpipeRestRepository {
     @Value("${snowpiperest.purge_rate}")
     private int purge_rate;
 
+    @Value("${snowpiperest.insert_throttle_threshold_in_percentage}")
+    private int insert_throttle_threshold_in_percentage;
+
     @Value("${snowflake.url}")
     private String snowflake_url;
 
@@ -74,6 +78,7 @@ public class SnowpipeRestRepository {
         props.put("user", snowflake_user);
         props.put("role", snowflake_role);
         props.put("private_key", snowflake_private_key);
+        props.put(ParameterProvider.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE, 20);
 
         // Connect to Snowflake with credentials.
         try {
