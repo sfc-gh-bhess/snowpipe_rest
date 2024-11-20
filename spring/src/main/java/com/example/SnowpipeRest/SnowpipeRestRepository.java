@@ -28,6 +28,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 import com.google.common.collect.Lists;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
 import javax.annotation.PostConstruct;
 
 import org.slf4j.Logger;
@@ -48,6 +51,7 @@ public class SnowpipeRestRepository {
     private String suffix = UUID.randomUUID().toString();
     // private ExecutorService executorService = Executors.newFixedThreadPool(1);
     private Map<String, CompletableFuture<Void>> purgers = new HashMap<String, CompletableFuture<Void>>();
+    private final Counter insert_row_count;
 
     @Value("${snowpiperest.batch_size}")
     private int batch_size;
@@ -57,6 +61,15 @@ public class SnowpipeRestRepository {
 
     @Value("${snowpiperest.insert_throttle_threshold_in_percentage}")
     private int insert_throttle_threshold_in_percentage;
+
+    @Value("${snowpiperest.max_client_lag}")
+    private int max_client_lag;
+
+    @Value("${snowpiperest.max_channel_size_in_bytes}")
+    private int max_channel_size_in_bytes;
+
+    @Value("${snowpiperest.max_chunk_size_in_bytes}")
+    private int max_chunk_size_in_bytes;
 
     @Value("${snowflake.url}")
     private String snowflake_url;
@@ -70,6 +83,13 @@ public class SnowpipeRestRepository {
     @Value("${snowflake.private_key}")
     private String snowflake_private_key;
 
+    public SnowpipeRestRepository(MeterRegistry registry) {
+        // set up actuator metrics
+        insert_row_count = Counter.builder("rows.inserted")
+                                    .description("Number of rows created")
+                                    .register(registry);
+    }
+
     @PostConstruct
     private void init() {
         // get Snowflake credentials and put them in props
@@ -78,7 +98,14 @@ public class SnowpipeRestRepository {
         props.put("user", snowflake_user);
         props.put("role", snowflake_role);
         props.put("private_key", snowflake_private_key);
-        props.put(ParameterProvider.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE, 20);
+        if (this.insert_throttle_threshold_in_percentage > 0)
+            props.put(ParameterProvider.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE, this.insert_throttle_threshold_in_percentage);
+        if (this.max_client_lag > 0)
+            props.put(ParameterProvider.MAX_CLIENT_LAG, this.max_client_lag);
+        if (this.max_channel_size_in_bytes > 0)
+            props.put(ParameterProvider.MAX_CHANNEL_SIZE_IN_BYTES, this.max_channel_size_in_bytes);
+        if (this.max_chunk_size_in_bytes > 0)
+            props.put(ParameterProvider.MAX_CHANNEL_SIZE_IN_BYTES, this.max_chunk_size_in_bytes);
 
         // Connect to Snowflake with credentials.
         try {
@@ -176,6 +203,7 @@ public class SnowpipeRestRepository {
         List<List<Map<String,Object>>> batches = Lists.partition(rows, batch_size);
         List<List<Object>> batchStrings = Lists.partition(rowStrings, batch_size);
         SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(0, 0, 0);
+        logger.info(String.format("Inserting %d batches.", batches.size()));
         for (int i = 0; i < batches.size(); i++) {
             insert_count++;
             String new_token = String.valueOf(insert_count);
@@ -185,7 +213,8 @@ public class SnowpipeRestRepository {
             this.insert_count.put(insert_count_key, insert_count);
 
             // Make response
-            sp_resp.add_metrics(rows.size(), rows.size() - resp.getErrorRowCount(), resp.getErrorRowCount());
+            insert_row_count.increment(batches.get(i).size() - resp.getErrorRowCount());
+            sp_resp.add_metrics(batches.get(i).size(), batches.get(i).size() - resp.getErrorRowCount(), resp.getErrorRowCount());
             for (InsertValidationResponse.InsertError insertError : resp.getInsertErrors()) {
                 int idx = (int)insertError.getRowIndex();
                 try {
