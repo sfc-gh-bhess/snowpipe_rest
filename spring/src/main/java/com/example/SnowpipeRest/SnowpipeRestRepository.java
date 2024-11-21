@@ -84,13 +84,13 @@ public class SnowpipeRestRepository {
     private int INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE;
 
     @Value("${snowpiperest.max_client_lag}")
-    private int MAX_CLIENT_LAG;
+    private long MAX_CLIENT_LAG;
 
     @Value("${snowpiperest.max_channel_size_in_bytes}")
-    private int MAX_CHANNEL_SIZE_IN_BYTES;
+    private long MAX_CHANNEL_SIZE_IN_BYTES;
 
     @Value("${snowpiperest.max_chunk_size_in_bytes}")
-    private int MAX_CHUNK_SIZE_IN_BYTES;
+    private long MAX_CHUNK_SIZE_IN_BYTES;
 
     public void setParameters(Properties props) {
         logger.info(String.format("Setting Snowpipe Parameters"));
