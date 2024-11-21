@@ -59,18 +59,6 @@ public class SnowpipeRestRepository {
     @Value("${snowpiperest.purge_rate}")
     private int purge_rate;
 
-    @Value("${snowpiperest.insert_throttle_threshold_in_percentage}")
-    private int insert_throttle_threshold_in_percentage;
-
-    @Value("${snowpiperest.max_client_lag}")
-    private int max_client_lag;
-
-    @Value("${snowpiperest.max_channel_size_in_bytes}")
-    private int max_channel_size_in_bytes;
-
-    @Value("${snowpiperest.max_chunk_size_in_bytes}")
-    private int max_chunk_size_in_bytes;
-
     @Value("${snowflake.url}")
     private String snowflake_url;
 
@@ -90,6 +78,37 @@ public class SnowpipeRestRepository {
                                     .register(registry);
     }
 
+    //------------------------------
+    // Snowpipe Streaming Parameters
+    @Value("${snowpiperest.insert_throttle_threshold_in_percentage}")
+    private int INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE;
+
+    @Value("${snowpiperest.max_client_lag}")
+    private int MAX_CLIENT_LAG;
+
+    @Value("${snowpiperest.max_channel_size_in_bytes}")
+    private int MAX_CHANNEL_SIZE_IN_BYTES;
+
+    @Value("${snowpiperest.max_chunk_size_in_bytes}")
+    private int MAX_CHUNK_SIZE_IN_BYTES;
+
+    public void setParameters(Properties props) {
+        logger.info(String.format("Setting Snowpipe Parameters"));
+        logger.info(String.format("INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE: %d", this.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE));
+        logger.info(String.format("MAX_CLIENT_LAG: %d", this.MAX_CLIENT_LAG));
+        logger.info(String.format("MAX_CHANNEL_SIZE_IN_BYTES: %d", this.MAX_CHANNEL_SIZE_IN_BYTES));
+        logger.info(String.format("MAX_CHUNK_SIZE_IN_BYTES: %d", this.MAX_CHUNK_SIZE_IN_BYTES));
+        if (this.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE > 0)
+            props.put(ParameterProvider.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE, this.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE);
+        if (this.MAX_CLIENT_LAG > 0)
+            props.put(ParameterProvider.MAX_CLIENT_LAG, this.MAX_CLIENT_LAG);
+        if (this.MAX_CHANNEL_SIZE_IN_BYTES > 0)
+            props.put(ParameterProvider.MAX_CHANNEL_SIZE_IN_BYTES, this.MAX_CHANNEL_SIZE_IN_BYTES);
+        if (this.MAX_CHUNK_SIZE_IN_BYTES > 0)
+            props.put(ParameterProvider.MAX_CHUNK_SIZE_IN_BYTES, this.MAX_CHUNK_SIZE_IN_BYTES);
+    }
+    //------------------------------
+
     @PostConstruct
     private void init() {
         // get Snowflake credentials and put them in props
@@ -98,15 +117,7 @@ public class SnowpipeRestRepository {
         props.put("user", snowflake_user);
         props.put("role", snowflake_role);
         props.put("private_key", snowflake_private_key);
-        if (this.insert_throttle_threshold_in_percentage > 0)
-            props.put(ParameterProvider.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE, this.insert_throttle_threshold_in_percentage);
-        if (this.max_client_lag > 0)
-            props.put(ParameterProvider.MAX_CLIENT_LAG, this.max_client_lag);
-        if (this.max_channel_size_in_bytes > 0)
-            props.put(ParameterProvider.MAX_CHANNEL_SIZE_IN_BYTES, this.max_channel_size_in_bytes);
-        if (this.max_chunk_size_in_bytes > 0)
-            props.put(ParameterProvider.MAX_CHANNEL_SIZE_IN_BYTES, this.max_chunk_size_in_bytes);
-
+        setParameters(props);
         // Connect to Snowflake with credentials.
         try {
             // Make Snowflake Streaming Ingest Client
@@ -200,8 +211,13 @@ public class SnowpipeRestRepository {
         int insert_count = this.insert_count.get(insert_count_key);
 
         // Issue the insert
-        List<List<Map<String,Object>>> batches = Lists.partition(rows, batch_size);
-        List<List<Object>> batchStrings = Lists.partition(rowStrings, batch_size);
+        List<List<Map<String,Object>>> batches = Collections.singletonList(rows); // = Lists.partition(rows, batch_size);
+        List<List<Object>> batchStrings = Collections.singletonList(rowStrings); // = Lists.partition(rowStrings, batch_size);
+        if (this.batch_size > 0) {
+            logger.info(String.format("Batching..."));
+            batches = Lists.partition(rows, batch_size);
+            batchStrings = Lists.partition(rowStrings, batch_size);    
+        }
         SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(0, 0, 0);
         logger.info(String.format("Inserting %d batches.", batches.size()));
         for (int i = 0; i < batches.size(); i++) {
