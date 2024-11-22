@@ -92,6 +92,9 @@ public class SnowpipeRestRepository {
     @Value("${snowpiperest.max_chunk_size_in_bytes}")
     private long MAX_CHUNK_SIZE_IN_BYTES;
 
+    @Value("${snowpiperest.io_time_cpu_ratio}")
+    private long IO_TIME_CPU_RATIO;
+
     public void setParameters(Properties props) {
         logger.info(String.format("Setting Snowpipe Parameters"));
         logger.info(String.format("INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE: %d", this.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE));
@@ -106,6 +109,8 @@ public class SnowpipeRestRepository {
             props.put(ParameterProvider.MAX_CHANNEL_SIZE_IN_BYTES, this.MAX_CHANNEL_SIZE_IN_BYTES);
         if (this.MAX_CHUNK_SIZE_IN_BYTES > 0)
             props.put(ParameterProvider.MAX_CHUNK_SIZE_IN_BYTES, this.MAX_CHUNK_SIZE_IN_BYTES);
+        if (this.IO_TIME_CPU_RATIO > 0)
+            props.put(ParameterProvider.IO_TIME_CPU_RATIO, this.IO_TIME_CPU_RATIO);
     }
     //------------------------------
 
