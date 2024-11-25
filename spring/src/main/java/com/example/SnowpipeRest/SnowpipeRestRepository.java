@@ -16,15 +16,17 @@ import net.snowflake.ingest.utils.SFException;
 import java.util.Map;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.UUID;
+import java.lang.management.ManagementFactory;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import com.google.common.collect.Lists;
 
@@ -32,6 +34,8 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import javax.annotation.PostConstruct;
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +44,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class SnowpipeRestRepository {
-    Logger logger = LoggerFactory.getLogger(SnowpipeRestRepository.class);
+    static Logger logger = LoggerFactory.getLogger(SnowpipeRestRepository.class);
     
     private ObjectMapper objectMapper = new ObjectMapper();
     private SnowflakeStreamingIngestClient snowpipe_client;
@@ -111,6 +115,7 @@ public class SnowpipeRestRepository {
             props.put(ParameterProvider.MAX_CHUNK_SIZE_IN_BYTES, this.MAX_CHUNK_SIZE_IN_BYTES);
         if (this.IO_TIME_CPU_RATIO > 0)
             props.put(ParameterProvider.IO_TIME_CPU_RATIO, this.IO_TIME_CPU_RATIO);
+        props.put(ParameterProvider.ENABLE_SNOWPIPE_STREAMING_METRICS, true);
     }
     //------------------------------
 
@@ -128,6 +133,7 @@ public class SnowpipeRestRepository {
             // Make Snowflake Streaming Ingest Client
             this.snowpipe_client = SnowflakeStreamingIngestClientFactory.builder("SNOWPIPE_REST_" + this.suffix)
                     .setProperties(props).build();
+            startReporter();
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
             throw new RuntimeException(e);
@@ -326,4 +332,52 @@ public class SnowpipeRestRepository {
             }
         }
     }
+
+    private static ScheduledExecutorService scheduler;
+    private static void startReporter() {
+        scheduler = Executors.newSingleThreadScheduledExecutor();
+        Runnable task = SnowpipeRestRepository::fetchAndPrintMetrics;
+        scheduler.scheduleAtFixedRate(task, 30, 30, TimeUnit.SECONDS);
+    }
+
+    private static void fetchAndPrintMetrics() {
+        logger.info("Fetching JMX metrics");
+        try {
+            MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
+            ObjectName queryName = new ObjectName("snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=latency.*");
+            Set<ObjectName> names = mBeanServer.queryNames(queryName, null);
+            if (names.isEmpty()) {
+                logger.info("No JMX metrics found");
+            }
+            else {
+                for (ObjectName name: names) {
+                    Map<String, Object> attributes = new LinkedHashMap<>();
+                    attributes.put("metric", name.getCanonicalName());
+                    attributes.put("count", mBeanServer.getAttribute(name, "Count"));
+                    attributes.put("min", mBeanServer.getAttribute(name, "Min"));
+                    attributes.put("max", mBeanServer.getAttribute(name, "Max"));
+                    attributes.put("mean", mBeanServer.getAttribute(name, "Mean"));
+                    attributes.put("stddev", mBeanServer.getAttribute(name, "StdDev"));
+                    attributes.put("p50", mBeanServer.getAttribute(name, "50thPercentile"));
+                    attributes.put("p75", mBeanServer.getAttribute(name, "75thPercentile"));
+                    attributes.put("p95", mBeanServer.getAttribute(name, "95thPercentile"));
+                    attributes.put("p99", mBeanServer.getAttribute(name, "99thPercentile"));
+                    attributes.put("p999", mBeanServer.getAttribute(name, "999thPercentile"));
+                    attributes.put("duration_unit", mBeanServer.getAttribute(name, "DurationUnit"));
+                    // Constructing the key-value pair string dynamically
+                    StringBuilder kvPairs = new StringBuilder();
+                    for (Map.Entry<String, Object> entry : attributes.entrySet()) {
+                        if (kvPairs.length() > 0) {
+                            kvPairs.append(", ");
+                        }
+                        kvPairs.append(entry.getKey()).append("=").append(entry.getValue());
+                    }
+                    logger.info("JMX latency: " + kvPairs);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Unable to log JMX metrics", e);
+        }
+    }
+
 }
