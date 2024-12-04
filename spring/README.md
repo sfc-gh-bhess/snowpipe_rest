@@ -37,11 +37,28 @@ You need to specify a few parameters to run:
 * `snowflake.role` - the role for the Snowflake user that the application should use
 * `snowflake.private_key` - the SSH private key for the Snowflake user; this should be the private PEM file minus the header and footer and on one line (CR/LF removed).
 
+There are some additional parameters that can be set to fine-tune 
+the Snowpipe Streaming SDK. The defaults should be fine to use as-is:
+* `snowpiperest.purge_rate` - the rate (in milliseconds) at which WAL files will be deleted (if they can be) (default: `1000`)
+* `snowpiperest.batch_size` - the number of rows to insert at one time in the Snowpipe Streaming SDK (default: `144`)
+* `snowpiperest.insert_throttle_threshold_in_percentage` - what percentage of free memory to have before throttling (default: `20`)
+* `snowpiperest.max_client_lag` - max time (in milliseconds) between flush operations (default: `10000`)
+* `snowpiperest.max_channel_size_in_bytes` - max size of channel (in bytes) before flushing (default: `67108864`)
+* `snowpiperest.max_chunk_size_in_bytes` - max sixe of chunk (in bytes) before flushing (default: `268435456`)
+* `snowpiperest.io_time_cpu_ratio` - ratio between managing inserts and flushing (default: `2`)
+
 You can set these by environment variable, as well:
 * `SNOWFLAKE_URL` for `snowflake.url`
 * `SNOWFLAKE_USER` for `snowflake.user`
 * `SNOWFLAKE_ROLE` for `snowflake.role`
 * `SNOWFLAKE_PRIVATE_KEY` for `snowflake.private_key`
+* `SNOWPIPEREST_PURGE_RATE` for `snowpiperest.purge_rate`
+* `SNOWPIPEREST_BATCH_SIZE` for `snowpiperest.batch_size`
+* `SNOWPIPEREST_INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE` for `snowpiperest.insert_throttle_threshold_in_percentage`
+* `SNOWPIPEREST_MAX_CLIENT_LAG` for `snowpiperest.max_client_lag`
+* `SNOWPIPEREST_MAX_CHANNEL_SIZE_IN_BYTES` for `snowpiperest.max_channel_size_in_bytes`
+* `SNOWPIPEREST_MAX_CHUNK_SIZE_IN_BYTES` for `snowpiperest.max_chunk_size_in_bytes`
+* `SNOWPIPEREST_IO_TIME_CPU_RATIO` for `snowpiperest.io_time_cpu_ratio`
 
 From the commandline run:
 ```bash
@@ -59,6 +76,11 @@ Additionally, set the proper environment variables and run:
 ```bash
 java -jar target/SnowpipeRest-0.0.1-SNAPSHOT.jar
 ```
+
+Additionally, if a payload includes too many rows to insert, we will batch
+the rows into smaller batches. There is a parameter to adjust the batchsize,
+`snowpiperest.batch_size`, which defaults to `144`. You can also set it via an
+environment variable named `SNOWPIPEREST_BATCH_SIZE`.
 
 ## Running with Docker
 If you want to build a Docker container for this application, you can run
