@@ -6,4 +6,4 @@ WORKDIR /app
 
 COPY target/*.jar .
 
-ENTRYPOINT [ "java", "-Xms8g", "-Xmx8g", "-jar", "SnowpipeRest-0.0.1-SNAPSHOT.jar" ]
+ENTRYPOINT [ "java", "-Xms40g", "-Xmx40g", "-XX:+HeapDumpOnOutOfMemoryError", "-jar", "SnowpipeRest-0.0.1-SNAPSHOT.jar", "--server.tomcat.threads.max", "10" ]
