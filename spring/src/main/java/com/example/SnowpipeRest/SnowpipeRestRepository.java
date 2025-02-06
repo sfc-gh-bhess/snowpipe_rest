@@ -5,33 +5,26 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 
-import net.snowflake.ingest.streaming.InsertValidationResponse;
 import net.snowflake.ingest.streaming.OpenChannelRequest;
-import net.snowflake.ingest.streaming.SnowflakeStreamingIngestChannel;
 import net.snowflake.ingest.streaming.SnowflakeStreamingIngestClient;
 import net.snowflake.ingest.streaming.SnowflakeStreamingIngestClientFactory;
 import net.snowflake.ingest.utils.ParameterProvider;
-import net.snowflake.ingest.utils.SFException;
 
 import java.util.Map;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.UUID;
 import java.lang.management.ManagementFactory;
 import java.util.Collections;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.collect.Lists;
-
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 
 import javax.annotation.PostConstruct;
 import javax.management.MBeanAttributeInfo;
@@ -50,12 +43,8 @@ public class SnowpipeRestRepository {
     
     private ObjectMapper objectMapper = new ObjectMapper();
     private SnowflakeStreamingIngestClient snowpipe_client;
-    private Map<String, SnowflakeStreamingIngestChannel> snowpipe_channels = new HashMap<String, SnowflakeStreamingIngestChannel>();
-    private Map<String, Integer> insert_count = new HashMap<String, Integer>();
-    private Map<String, Map<String,List<Map<String,Object>>>> buffers = new HashMap<String,Map<String,List<Map<String,Object>>>>();
     private String suffix = UUID.randomUUID().toString();
-    private Map<String, CompletableFuture<Void>> purgers = new HashMap<String, CompletableFuture<Void>>();
-    private final Counter insert_row_count;
+    private ConcurrentMap<String,SnowpipeRestChannel> sp_channels = new ConcurrentHashMap<String,SnowpipeRestChannel>();
 
     @Value("${snowpiperest.batch_size}")
     private int batch_size;
@@ -78,11 +67,7 @@ public class SnowpipeRestRepository {
     @Value("${snowflake.private_key}")
     private String snowflake_private_key;
 
-    public SnowpipeRestRepository(MeterRegistry registry) {
-        // set up actuator metrics
-        insert_row_count = Counter.builder("rows.inserted")
-                                    .description("Number of rows created")
-                                    .register(registry);
+    public SnowpipeRestRepository() {
     }
 
     //------------------------------
@@ -146,11 +131,14 @@ public class SnowpipeRestRepository {
     }
 
     private String makeKey(String database, String schema, String table) {
+        /*
+         * TODO: Should we add the thread ID to the key: Thread.currentThread().getId()
+         */
         return String.format("%s.%s.%s", database.toUpperCase(), schema.toUpperCase(), table.toUpperCase());
     }
 
     // Gets or creates and stores Snowflake Streaming Ingest Channel for the table
-    private SnowflakeStreamingIngestChannel getIngestChannel(String database, String schema, String table) {
+    private SnowpipeRestChannel getSnowpipeRestChannel(String database, String schema, String table) {
         if (null == database)
             throw new RuntimeException("Must specify database");
         if (null == schema)
@@ -158,47 +146,25 @@ public class SnowpipeRestRepository {
         if (null == table)
             throw new RuntimeException("Must specify table");
         String key = makeKey(database, schema, table);
-        if (this.snowpipe_channels.containsKey(key))
-            return this.snowpipe_channels.get(key);
+        if (this.sp_channels.containsKey(key))
+            return this.sp_channels.get(key);
 
         try {
-            if (this.purgers.containsKey(key))
-                this.purgers.get(key).cancel(true);
+            if (this.sp_channels.containsKey(key))
+                this.sp_channels.get(key).get_purger().cancel(true);
             OpenChannelRequest request1 = OpenChannelRequest.builder("SNOWPIPE_REST_CHANNEL_" + this.suffix)
                     .setDBName(database)
                     .setSchemaName(schema)
                     .setTableName(table)
                     .setOnErrorOption(OpenChannelRequest.OnErrorOption.CONTINUE)
                     .build();
-            SnowflakeStreamingIngestChannel channel = this.snowpipe_client.openChannel(request1);
-            this.snowpipe_channels.put(key, channel);
-            this.insert_count.put(key, 0);
-            if (!this.buffers.containsKey(key))
-                this.buffers.put(key, new ConcurrentHashMap<String,List<Map<String,Object>>>());
-
-            this.purgers.put(key, CompletableFuture.runAsync(() -> purger(key)));
-
-            return channel;
+            this.sp_channels.computeIfAbsent(key, k -> new SnowpipeRestChannel(key, this.snowpipe_client, request1, this.purge_rate));
+            return this.sp_channels.get(key);
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
             e.printStackTrace();
             throw new SnowpipeRestTableNotFoundException(String.format("Table not found (or no permissions): %s.%s.%s", database.toUpperCase(), schema.toUpperCase(), table.toUpperCase()));
         }
-    }
-
-    private SnowflakeStreamingIngestChannel makeChannelValid(String database, String schema, String table) {
-        String key = makeKey(database, schema, table);
-        logger.info(String.format("Making channel valid: %s", key));
-        if (this.snowpipe_channels.containsKey(key)) {
-            SnowflakeStreamingIngestChannel channel = this.snowpipe_channels.get(key);
-            if (channel.isValid())
-                return channel;
-            else
-                this.snowpipe_channels.remove(key);
-        }
-        SnowflakeStreamingIngestChannel channel = getIngestChannel(database, schema, table);
-        replayBuffer(database, schema, table);
-        return channel;
     }
 
     public SnowpipeInsertResponse saveToSnowflake(String database, String schema, String table, String body) {
@@ -219,10 +185,7 @@ public class SnowpipeRestRepository {
         }
 
         // Get ingest channel
-        this.getIngestChannel(database, schema, table); // Need to get the channel so the buffer and count are created
-        Map<String,List<Map<String,Object>>> buff = this.buffers.get(makeKey(database, schema, table));
-        String insert_count_key = makeKey(database, schema, table);
-        int insert_count = this.insert_count.get(insert_count_key);
+        SnowpipeRestChannel sp_channel = this.getSnowpipeRestChannel(database, schema, table); // Need to get the channel so the buffer and count are created
 
         // Issue the insert
         List<List<Map<String,Object>>> batches = Collections.singletonList(rows); // = Lists.partition(rows, batch_size);
@@ -232,96 +195,8 @@ public class SnowpipeRestRepository {
             batches = Lists.partition(rows, batch_size);
             batchStrings = Lists.partition(rowStrings, batch_size);    
         }
-        SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(0, 0, 0);
-        logger.info(String.format("Inserting %d batches.", batches.size()));
-        for (int i = 0; i < batches.size(); i++) {
-            insert_count++;
-            String new_token = String.valueOf(insert_count);
-            InsertValidationResponse resp = insertRows(batches.get(i), new_token, database, schema, table);
-            if (this.disable_buffering != 0)
-                buff.put(new_token, batches.get(i));
-            this.insert_count.put(insert_count_key, insert_count);
-
-            // Make response
-            insert_row_count.increment(batches.get(i).size() - resp.getErrorRowCount());
-            sp_resp.add_metrics(batches.get(i).size(), batches.get(i).size() - resp.getErrorRowCount(), resp.getErrorRowCount());
-            for (InsertValidationResponse.InsertError insertError : resp.getInsertErrors()) {
-                int idx = (int)insertError.getRowIndex();
-                try {
-                    sp_resp.addError(idx, objectMapper.writeValueAsString(batchStrings.get(i).get(idx)), insertError.getMessage());
-                }
-                catch (JsonProcessingException je) {
-                    throw new RuntimeException(je);
-                }    
-            }
-        }
+        SnowpipeInsertResponse sp_resp = sp_channel.insertBatches(batches, batchStrings);
         return sp_resp;
-    }
-
-    private InsertValidationResponse insertRows(List<Map<String,Object>> batch, String new_token, 
-                                                String database, String schema, String table) {
-        SnowflakeStreamingIngestChannel channel = this.getIngestChannel(database, schema, table);
-        InsertValidationResponse resp;
-        try {
-            resp = channel.insertRows(batch, new_token);
-        }
-        catch (SFException ex) {
-            makeChannelValid(database, schema, table);
-            resp = insertRows(batch, new_token, database, schema, table);
-        }
-        return resp;
-    }
-
-    private void purger(String key) {
-        try {
-            while (true) {
-                freePlayed(key);
-                Thread.sleep(this.purge_rate);
-            }
-        }        
-        catch (Exception e) {
-            return;
-        }
-    }
-
-    private void freePlayed(String key) {
-        SnowflakeStreamingIngestChannel channel = this.snowpipe_channels.get(key);
-        String last_token_str = channel.getLatestCommittedOffsetToken();
-        int last_token = -1;
-        if (null == last_token_str)
-            return;
-        try {
-            last_token = Integer.parseInt(last_token_str);
-        }
-        catch (Exception e) {
-            logger.info(String.format("XXXX: %s", e.getMessage()));
-        }
-        Map<String,List<Map<String,Object>>> buff = this.buffers.get(key);
-        int ttoken = last_token;
-        List<String> keys = buff.keySet().stream().filter(k -> Integer.parseInt(k) <= ttoken).toList();
-        if (keys.size() > 0) {
-            logger.info(String.format("Purging from %s: %s", key, keys));
-            for (String k : keys) {
-                buff.remove(k);
-            }
-        }
-    }
-
-    private void replayBuffer(String database, String schema, String table) {
-        String key = makeKey(database, schema, table);
-        logger.info(String.format("Replaying buffer: %s", key));
-        freePlayed(key);
-        Map<String,List<Map<String,Object>>> buff = this.buffers.get(key);
-        List<Integer> tokens = buff.keySet().stream().map(e -> Integer.parseInt(e)).sorted().toList();
-        for (Integer t : tokens) {
-            String token = String.valueOf(t);
-            try {
-                insertRows(buff.get(token), token, database, schema, table);
-            }
-            catch (SFException ex) {
-                makeChannelValid(database, schema, table);
-            }
-        }
     }
 
     // Metrics Reporting
