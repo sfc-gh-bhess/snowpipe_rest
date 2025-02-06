@@ -34,6 +34,8 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import javax.annotation.PostConstruct;
+import javax.management.MBeanAttributeInfo;
+import javax.management.MBeanInfo;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
@@ -50,10 +52,8 @@ public class SnowpipeRestRepository {
     private SnowflakeStreamingIngestClient snowpipe_client;
     private Map<String, SnowflakeStreamingIngestChannel> snowpipe_channels = new HashMap<String, SnowflakeStreamingIngestChannel>();
     private Map<String, Integer> insert_count = new HashMap<String, Integer>();
-    // private Map<String, ConcurrentHashMap<String,List<Map<String,Object>>>> buffers = new HashMap<String,ConcurrentHashMap<String,List<Map<String,Object>>>>();
     private Map<String, Map<String,List<Map<String,Object>>>> buffers = new HashMap<String,Map<String,List<Map<String,Object>>>>();
     private String suffix = UUID.randomUUID().toString();
-    // private ExecutorService executorService = Executors.newFixedThreadPool(1);
     private Map<String, CompletableFuture<Void>> purgers = new HashMap<String, CompletableFuture<Void>>();
     private final Counter insert_row_count;
 
@@ -62,6 +62,9 @@ public class SnowpipeRestRepository {
 
     @Value("${snowpiperest.purge_rate}")
     private int purge_rate;
+
+    @Value("${snowpiperest.disable_buffering}")
+    private int disable_buffering;
 
     @Value("${snowflake.url}")
     private String snowflake_url;
@@ -116,6 +119,8 @@ public class SnowpipeRestRepository {
         if (this.IO_TIME_CPU_RATIO > 0)
             props.put(ParameterProvider.IO_TIME_CPU_RATIO, this.IO_TIME_CPU_RATIO);
         props.put(ParameterProvider.ENABLE_SNOWPIPE_STREAMING_METRICS, true);
+        if (this.disable_buffering != 0)
+            logger.info("Disabling buffering");
     }
     //------------------------------
 
@@ -170,14 +175,12 @@ public class SnowpipeRestRepository {
             this.insert_count.put(key, 0);
             if (!this.buffers.containsKey(key))
                 this.buffers.put(key, new ConcurrentHashMap<String,List<Map<String,Object>>>());
-                // this.buffers.put(key, new HashMap<String,List<Map<String,Object>>>());
 
             this.purgers.put(key, CompletableFuture.runAsync(() -> purger(key)));
 
             return channel;
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
-            // throw new RuntimeException(e);
             e.printStackTrace();
             throw new SnowpipeRestTableNotFoundException(String.format("Table not found (or no permissions): %s.%s.%s", database.toUpperCase(), schema.toUpperCase(), table.toUpperCase()));
         }
@@ -234,9 +237,9 @@ public class SnowpipeRestRepository {
         for (int i = 0; i < batches.size(); i++) {
             insert_count++;
             String new_token = String.valueOf(insert_count);
-            // InsertValidationResponse resp = channel.insertRows(batches.get(i), new_token);
             InsertValidationResponse resp = insertRows(batches.get(i), new_token, database, schema, table);
-            buff.put(new_token, batches.get(i));
+            if (this.disable_buffering != 0)
+                buff.put(new_token, batches.get(i));
             this.insert_count.put(insert_count_key, insert_count);
 
             // Make response
@@ -252,22 +255,12 @@ public class SnowpipeRestRepository {
                 }    
             }
         }
-        // if (((ThreadPoolExecutor)(this.executorService)).getQueue().size() == 0) {
-        //     logger.info(String.format("Starting freePlayed thread: %d", ((ThreadPoolExecutor)(this.executorService)).getQueue().size()));
-        //     this.executorService.submit(() -> {
-        //         freePlayed(insert_count_key);
-        //     });
-        // }
-        // else {
-        //     logger.info(String.format("Someone else is on it"));
-        // }
         return sp_resp;
     }
 
     private InsertValidationResponse insertRows(List<Map<String,Object>> batch, String new_token, 
                                                 String database, String schema, String table) {
         SnowflakeStreamingIngestChannel channel = this.getIngestChannel(database, schema, table);
-        // Map<String,List<Map<String,Object>>> buff = this.buffers.get(makeKey(database, schema, table));
         InsertValidationResponse resp;
         try {
             resp = channel.insertRows(batch, new_token);
@@ -276,7 +269,6 @@ public class SnowpipeRestRepository {
             makeChannelValid(database, schema, table);
             resp = insertRows(batch, new_token, database, schema, table);
         }
-        // buff.put(new_token, batch);
         return resp;
     }
 
@@ -319,7 +311,6 @@ public class SnowpipeRestRepository {
         String key = makeKey(database, schema, table);
         logger.info(String.format("Replaying buffer: %s", key));
         freePlayed(key);
-        // SnowflakeStreamingIngestChannel channel = this.snowpipe_channels.get(key);
         Map<String,List<Map<String,Object>>> buff = this.buffers.get(key);
         List<Integer> tokens = buff.keySet().stream().map(e -> Integer.parseInt(e)).sorted().toList();
         for (Integer t : tokens) {
@@ -333,6 +324,7 @@ public class SnowpipeRestRepository {
         }
     }
 
+    // Metrics Reporting
     private static ScheduledExecutorService scheduler;
     private static void startReporter() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -344,39 +336,46 @@ public class SnowpipeRestRepository {
         logger.info("Fetching JMX metrics");
         try {
             MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
-            ObjectName queryName = new ObjectName("snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=latency.*");
-            Set<ObjectName> names = mBeanServer.queryNames(queryName, null);
-            if (names.isEmpty()) {
-                logger.info("No JMX metrics found");
-            }
-            else {
-                for (ObjectName name: names) {
-                    Map<String, Object> attributes = new LinkedHashMap<>();
-                    attributes.put("metric", name.getCanonicalName());
-                    attributes.put("count", mBeanServer.getAttribute(name, "Count"));
-                    attributes.put("min", mBeanServer.getAttribute(name, "Min"));
-                    attributes.put("max", mBeanServer.getAttribute(name, "Max"));
-                    attributes.put("mean", mBeanServer.getAttribute(name, "Mean"));
-                    attributes.put("stddev", mBeanServer.getAttribute(name, "StdDev"));
-                    attributes.put("p50", mBeanServer.getAttribute(name, "50thPercentile"));
-                    attributes.put("p75", mBeanServer.getAttribute(name, "75thPercentile"));
-                    attributes.put("p95", mBeanServer.getAttribute(name, "95thPercentile"));
-                    attributes.put("p99", mBeanServer.getAttribute(name, "99thPercentile"));
-                    attributes.put("p999", mBeanServer.getAttribute(name, "999thPercentile"));
-                    attributes.put("duration_unit", mBeanServer.getAttribute(name, "DurationUnit"));
-                    // Constructing the key-value pair string dynamically
-                    StringBuilder kvPairs = new StringBuilder();
-                    for (Map.Entry<String, Object> entry : attributes.entrySet()) {
-                        if (kvPairs.length() > 0) {
-                            kvPairs.append(", ");
-                        }
-                        kvPairs.append(entry.getKey()).append("=").append(entry.getValue());
-                    }
-                    logger.info("JMX latency: " + kvPairs);
-                }
-            }
+            // Latency
+            fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=latency.*", "JMX latency: ");
+
+            // Throughput
+            fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=throughput.*", "JMX throughput: ");
+
+            // Blob
+            fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=blob.*", "JMX blob: ");
+
         } catch (Exception e) {
             logger.error("Unable to log JMX metrics", e);
+        }
+    }
+
+    private static void fetchAndPrintMetrics(MBeanServer mBeanServer, String queryNameString, String logPrefix) throws Exception {
+        ObjectName queryName = new ObjectName(queryNameString);
+        Set<ObjectName> names = mBeanServer.queryNames(queryName, null);
+        if (names.isEmpty()) {
+            logger.info("No JMX metrics found: " + queryNameString);
+        }
+        else {
+            for (ObjectName name: names) {
+                MBeanInfo info = mBeanServer.getMBeanInfo(name);
+                MBeanAttributeInfo[] attrInfo = info.getAttributes();
+                Map<String, Object> attributes = new LinkedHashMap<>();
+                for (MBeanAttributeInfo attr : attrInfo) {
+                    if (attr.isReadable())
+                        attributes.put(attr.getName(), mBeanServer.getAttribute(name, attr.getName()));
+                }
+                // Constructing the key-value pair string dynamically
+                StringBuilder kvPairs = new StringBuilder();
+                kvPairs.append("metric=" + name.getCanonicalName());
+                for (Map.Entry<String, Object> entry : attributes.entrySet()) {
+                    if (kvPairs.length() > 0) {
+                        kvPairs.append(", ");
+                    }
+                    kvPairs.append(entry.getKey()).append("=").append(entry.getValue());
+                }
+                logger.info(logPrefix + kvPairs);
+            }
         }
     }
 
