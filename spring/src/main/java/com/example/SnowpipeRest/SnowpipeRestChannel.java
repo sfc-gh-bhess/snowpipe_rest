@@ -23,30 +23,33 @@ public class SnowpipeRestChannel {
     private String key;
     private SnowflakeStreamingIngestChannel snowpipe_channel;
     private int insert_count;
-    private Map<String,List<Map<String,Object>>> buffer;
+    private Map<String,List<Map<String,Object>>> buffer = null;
     private CompletableFuture<Void> purger;
     private int purge_rate;
+    private boolean disable_buffering;
     private boolean dosynchronized;
     private OpenChannelRequest openChannelRequest;
     private SnowflakeStreamingIngestClient client;
     private ObjectMapper objectMapper = new ObjectMapper();
 
-    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate) {
-        this(key, snowpipe_client, request1, purge_rate, false);
+    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate, boolean disable_buffering) {
+        this(key, snowpipe_client, request1, purge_rate, disable_buffering, false);
     }
 
-    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate, boolean dosynchronized) {
+    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate, boolean disable_buffering, boolean dosynchronized) {
         this.key = key;
         this.client = snowpipe_client;
         this.openChannelRequest = request1;
         this.purge_rate = purge_rate;
+        this.disable_buffering = disable_buffering;
         this.dosynchronized = dosynchronized;
         init();
     }
 
     private void init() {
         this.snowpipe_channel = this.client.openChannel(openChannelRequest);
-        this.buffer = new ConcurrentHashMap<String,List<Map<String,Object>>>();
+        if (this.buffer == null)
+            this.buffer = new ConcurrentHashMap<String,List<Map<String,Object>>>();
         this.purger = CompletableFuture.runAsync(() -> purger());
         this.insert_count = 0;
     }
@@ -155,7 +158,8 @@ public class SnowpipeRestChannel {
         InsertValidationResponse resp;
         try {
             resp = this.snowpipe_channel.insertRows(batch, new_token);
-            this.buffer.put(new_token, batch);
+            if (!this.disable_buffering)
+                this.buffer.put(new_token, batch);
         }
         catch (SFException ex) {
             makeChannelValid();

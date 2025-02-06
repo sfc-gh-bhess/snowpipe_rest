@@ -162,7 +162,7 @@ public class SnowpipeRestRepository {
                     .setTableName(table)
                     .setOnErrorOption(OpenChannelRequest.OnErrorOption.CONTINUE)
                     .build();
-            this.sp_channels.computeIfAbsent(key, k -> new SnowpipeRestChannel(key, this.snowpipe_client, request1, this.purge_rate, (this.thread_in_key == 0)));
+            this.sp_channels.computeIfAbsent(key, k -> new SnowpipeRestChannel(key, this.snowpipe_client, request1, this.purge_rate, (this.disable_buffering == 0), (this.thread_in_key == 0)));
             return this.sp_channels.get(key);
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
