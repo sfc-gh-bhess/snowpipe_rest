@@ -26,15 +26,21 @@ public class SnowpipeRestChannel {
     private Map<String,List<Map<String,Object>>> buffer;
     private CompletableFuture<Void> purger;
     private int purge_rate;
+    private boolean dosynchronized;
     private OpenChannelRequest openChannelRequest;
     private SnowflakeStreamingIngestClient client;
     private ObjectMapper objectMapper = new ObjectMapper();
 
     public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate) {
+        this(key, snowpipe_client, request1, purge_rate, false);
+    }
+
+    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate, boolean dosynchronized) {
         this.key = key;
         this.client = snowpipe_client;
         this.openChannelRequest = request1;
         this.purge_rate = purge_rate;
+        this.dosynchronized = dosynchronized;
         init();
     }
 
@@ -84,12 +90,12 @@ public class SnowpipeRestChannel {
             last_token = Integer.parseInt(last_token_str);
         }
         catch (Exception e) {
-            logger.info(String.format("XXXX: %s", e.getMessage()));
+            logger.info(String.format("<%s> XXXX: %s", this.key, e.getMessage()));
         }
         int ttoken = last_token;
         List<String> pkeys = this.buffer.keySet().stream().filter(k -> Integer.parseInt(k) <= ttoken).toList();
         if (pkeys.size() > 0) {
-            logger.info(String.format("Purging from %s: %s", key, pkeys));
+            logger.info(String.format("<%s> Purging from %s: %s", key, key, pkeys));
             for (String k : pkeys) {
                 this.buffer.remove(k);
             }
@@ -97,7 +103,7 @@ public class SnowpipeRestChannel {
     }
 
     private SnowpipeRestChannel makeChannelValid() {
-        logger.info(String.format("Making channel valid: %s", key));
+        logger.info(String.format("<%s> Making channel valid: %s", key, key));
         if (this.snowpipe_channel.isValid())
             return this;
         init();
@@ -108,9 +114,19 @@ public class SnowpipeRestChannel {
     /*
      * TODO: Should this be synchronized or not?
      */
-    public synchronized SnowpipeInsertResponse insertBatches(List<List<Map<String,Object>>> batches, List<List<Object>> batchStrings) {
+    public SnowpipeInsertResponse insertBatches(List<List<Map<String,Object>>> batches, List<List<Object>> batchStrings) {
+        if (this.dosynchronized)
+            return insertBatches_syncrhonized(batches, batchStrings);
+        return doInsertBatches(batches, batchStrings);
+    }
+
+    public synchronized SnowpipeInsertResponse insertBatches_syncrhonized(List<List<Map<String,Object>>> batches, List<List<Object>> batchStrings) {
+        return doInsertBatches(batches, batchStrings);
+    }
+
+    public SnowpipeInsertResponse doInsertBatches(List<List<Map<String,Object>>> batches, List<List<Object>> batchStrings) {
         SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(0, 0, 0);
-        logger.info(String.format("Inserting %d batches.", batches.size()));
+        logger.info(String.format("<%s> Inserting %d batches.", this.key, batches.size()));
         for (int i = 0; i < batches.size(); i++) {
             InsertValidationResponse resp = this.insertBatch(batches.get(i));
 
@@ -149,7 +165,7 @@ public class SnowpipeRestChannel {
     }
 
     private void replayBuffer() {
-        logger.info(String.format("Replaying buffer: %s", key));
+        logger.info(String.format("<%s> Replaying buffer: %s", key, key));
         freePlayed();
         List<Integer> tokens = this.buffer.keySet().stream().map(e -> Integer.parseInt(e)).sorted().toList();
         for (Integer t : tokens) {

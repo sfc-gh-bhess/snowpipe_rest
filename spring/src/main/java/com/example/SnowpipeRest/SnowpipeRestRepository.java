@@ -55,6 +55,9 @@ public class SnowpipeRestRepository {
     @Value("${snowpiperest.disable_buffering}")
     private int disable_buffering;
 
+    @Value("${snowpiperest.thread_in_key}")
+    private int thread_in_key;
+
     @Value("${snowflake.url}")
     private String snowflake_url;
 
@@ -106,6 +109,8 @@ public class SnowpipeRestRepository {
         props.put(ParameterProvider.ENABLE_SNOWPIPE_STREAMING_METRICS, true);
         if (this.disable_buffering != 0)
             logger.info("Disabling buffering");
+        if (this.thread_in_key != 0)
+            logger.info("Setting up channel-per-thread");
     }
     //------------------------------
 
@@ -131,10 +136,9 @@ public class SnowpipeRestRepository {
     }
 
     private String makeKey(String database, String schema, String table) {
-        /*
-         * TODO: Should we add the thread ID to the key: Thread.currentThread().getId()
-         */
-        return String.format("%s.%s.%s", database.toUpperCase(), schema.toUpperCase(), table.toUpperCase());
+        if (this.thread_in_key == 0)
+            return String.format("%s.%s.%s", database.toUpperCase(), schema.toUpperCase(), table.toUpperCase());
+            return String.format("%s:%s.%s.%s", Thread.currentThread().getName(), database.toUpperCase(), schema.toUpperCase(), table.toUpperCase());
     }
 
     // Gets or creates and stores Snowflake Streaming Ingest Channel for the table
@@ -152,13 +156,13 @@ public class SnowpipeRestRepository {
         try {
             if (this.sp_channels.containsKey(key))
                 this.sp_channels.get(key).get_purger().cancel(true);
-            OpenChannelRequest request1 = OpenChannelRequest.builder("SNOWPIPE_REST_CHANNEL_" + this.suffix)
+            OpenChannelRequest request1 = OpenChannelRequest.builder("SNOWPIPE_REST_CHANNEL_" + this.suffix + "_" + key)
                     .setDBName(database)
                     .setSchemaName(schema)
                     .setTableName(table)
                     .setOnErrorOption(OpenChannelRequest.OnErrorOption.CONTINUE)
                     .build();
-            this.sp_channels.computeIfAbsent(key, k -> new SnowpipeRestChannel(key, this.snowpipe_client, request1, this.purge_rate));
+            this.sp_channels.computeIfAbsent(key, k -> new SnowpipeRestChannel(key, this.snowpipe_client, request1, this.purge_rate, (this.thread_in_key == 0)));
             return this.sp_channels.get(key);
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
