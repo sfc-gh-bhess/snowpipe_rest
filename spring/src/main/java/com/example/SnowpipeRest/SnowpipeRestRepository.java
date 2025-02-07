@@ -154,21 +154,25 @@ public class SnowpipeRestRepository {
             return this.sp_channels.get(key);
 
         try {
-            if (this.sp_channels.containsKey(key))
-                this.sp_channels.get(key).get_purger().cancel(true);
             OpenChannelRequest request1 = OpenChannelRequest.builder("SNOWPIPE_REST_CHANNEL_" + this.suffix + "_" + key)
                     .setDBName(database)
                     .setSchemaName(schema)
                     .setTableName(table)
                     .setOnErrorOption(OpenChannelRequest.OnErrorOption.CONTINUE)
                     .build();
-            this.sp_channels.computeIfAbsent(key, k -> new SnowpipeRestChannel(key, this.snowpipe_client, request1, this.purge_rate, (this.disable_buffering == 0), (this.thread_in_key == 0)));
+            openSnowpipeRestChannel(key, request1);
             return this.sp_channels.get(key);
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
             e.printStackTrace();
             throw new SnowpipeRestTableNotFoundException(String.format("Table not found (or no permissions): %s.%s.%s", database.toUpperCase(), schema.toUpperCase(), table.toUpperCase()));
         }
+    }
+
+    // Let's have only one thread open the channel
+    private synchronized void openSnowpipeRestChannel(String key, OpenChannelRequest request1) {
+        this.sp_channels.computeIfAbsent(key, k -> new SnowpipeRestChannel(key, this.snowpipe_client, request1, this.purge_rate, 
+                                            (this.disable_buffering != 0), (this.thread_in_key == 0)));
     }
 
     public SnowpipeInsertResponse saveToSnowflake(String database, String schema, String table, String body) {

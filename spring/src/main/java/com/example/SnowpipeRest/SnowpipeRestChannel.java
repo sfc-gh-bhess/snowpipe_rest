@@ -24,7 +24,7 @@ public class SnowpipeRestChannel {
     private SnowflakeStreamingIngestChannel snowpipe_channel;
     private int insert_count;
     private Map<String,List<Map<String,Object>>> buffer = null;
-    private CompletableFuture<Void> purger;
+    private CompletableFuture<Void> purger = null;
     private int purge_rate;
     private boolean disable_buffering;
     private boolean dosynchronized;
@@ -32,11 +32,13 @@ public class SnowpipeRestChannel {
     private SnowflakeStreamingIngestClient client;
     private ObjectMapper objectMapper = new ObjectMapper();
 
-    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate, boolean disable_buffering) {
+    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, 
+                                OpenChannelRequest request1, int purge_rate, boolean disable_buffering) {
         this(key, snowpipe_client, request1, purge_rate, disable_buffering, false);
     }
 
-    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, OpenChannelRequest request1, int purge_rate, boolean disable_buffering, boolean dosynchronized) {
+    public SnowpipeRestChannel(String key, SnowflakeStreamingIngestClient snowpipe_client, 
+                                OpenChannelRequest request1, int purge_rate, boolean disable_buffering, boolean dosynchronized) {
         this.key = key;
         this.client = snowpipe_client;
         this.openChannelRequest = request1;
@@ -48,28 +50,13 @@ public class SnowpipeRestChannel {
 
     private void init() {
         this.snowpipe_channel = this.client.openChannel(openChannelRequest);
-        if (this.buffer == null)
+        if (this.buffer == null) {
             this.buffer = new ConcurrentHashMap<String,List<Map<String,Object>>>();
+            this.insert_count = 0;
+        }
+        if (this.purger != null)
+            this.purger.cancel(true);
         this.purger = CompletableFuture.runAsync(() -> purger());
-        this.insert_count = 0;
-    }
-
-    public SnowflakeStreamingIngestChannel get_snowpipe_channel() {
-        return this.snowpipe_channel;
-    }
-    public int get_insert_count() {
-        return this.insert_count;
-    }
-    public Map<String,List<Map<String,Object>>> get_buffer() {
-        return this.buffer;
-    }
-    public CompletableFuture<Void> get_purger() {
-        return this.purger;
-    }
-
-    public int set_insert_count(int i) {
-        this.insert_count = i;
-        return i;
     }
 
     private void purger() {
@@ -105,7 +92,7 @@ public class SnowpipeRestChannel {
         }
     }
 
-    private SnowpipeRestChannel makeChannelValid() {
+    private synchronized SnowpipeRestChannel makeChannelValid() {
         logger.info(String.format("<%s> Making channel valid: %s", key, key));
         if (this.snowpipe_channel.isValid())
             return this;
@@ -114,9 +101,6 @@ public class SnowpipeRestChannel {
         return this;
     }
 
-    /*
-     * TODO: Should this be synchronized or not?
-     */
     public SnowpipeInsertResponse insertBatches(List<List<Map<String,Object>>> batches, List<List<Object>> batchStrings) {
         if (this.dosynchronized)
             return insertBatches_syncrhonized(batches, batchStrings);
@@ -131,7 +115,7 @@ public class SnowpipeRestChannel {
         SnowpipeInsertResponse sp_resp = new SnowpipeInsertResponse(0, 0, 0);
         logger.info(String.format("<%s> Inserting %d batches.", this.key, batches.size()));
         for (int i = 0; i < batches.size(); i++) {
-            InsertValidationResponse resp = this.insertBatch(batches.get(i));
+            InsertValidationResponse resp = this.insertBatch(batches.get(i), this.disable_buffering);
 
             // Make response
             sp_resp.add_metrics(batches.get(i).size(), batches.get(i).size() - resp.getErrorRowCount(), resp.getErrorRowCount());
@@ -148,22 +132,23 @@ public class SnowpipeRestChannel {
         return sp_resp;
     }
 
-    public InsertValidationResponse insertBatch(List<Map<String,Object>> batch) {
+    public InsertValidationResponse insertBatch(List<Map<String,Object>> batch, boolean dont_buffer) {
         this.insert_count++;
         String new_token = String.valueOf(insert_count);
-        return this.insertBatch(batch, new_token);
+        return this.insertBatch(batch, new_token, dont_buffer);
     }
 
-    private InsertValidationResponse insertBatch(List<Map<String,Object>> batch, String new_token) {
+    private InsertValidationResponse insertBatch(List<Map<String,Object>> batch, String new_token, boolean dont_buffer) {
         InsertValidationResponse resp;
         try {
             resp = this.snowpipe_channel.insertRows(batch, new_token);
-            if (!this.disable_buffering)
+            if (!dont_buffer) {
                 this.buffer.put(new_token, batch);
+            }
         }
         catch (SFException ex) {
             makeChannelValid();
-            resp = insertBatch(batch, new_token);
+            resp = insertBatch(batch, new_token, dont_buffer);
         }
         return resp;
     }
@@ -175,7 +160,7 @@ public class SnowpipeRestChannel {
         for (Integer t : tokens) {
             String token = String.valueOf(t);
             try {
-                insertBatch(this.buffer.get(token), token);
+                insertBatch(this.buffer.get(token), token, true); // don't need to buffer since it's replaying the buffer
             }
             catch (SFException ex) {
                 makeChannelValid();
