@@ -8,6 +8,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import net.snowflake.ingest.streaming.OpenChannelRequest;
 import net.snowflake.ingest.streaming.SnowflakeStreamingIngestClient;
 import net.snowflake.ingest.streaming.SnowflakeStreamingIngestClientFactory;
+import net.snowflake.ingest.streaming.internal.MemoryInfoProvider;
+import net.snowflake.ingest.streaming.internal.MemoryInfoProviderFromRuntime;
 import net.snowflake.ingest.utils.ParameterProvider;
 
 import java.util.Map;
@@ -27,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import com.google.common.collect.Lists;
 
 import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import javax.management.MBeanAttributeInfo;
 import javax.management.MBeanInfo;
 import javax.management.MBeanServer;
@@ -128,11 +131,17 @@ public class SnowpipeRestRepository {
             // Make Snowflake Streaming Ingest Client
             this.snowpipe_client = SnowflakeStreamingIngestClientFactory.builder("SNOWPIPE_REST_" + this.suffix)
                     .setProperties(props).build();
-            startReporter();
+            startReporter(INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE);
         } catch (Exception e) {
             // Handle Exception for Snowpipe Streaming objects
             throw new RuntimeException(e);
         }
+    }
+
+    @PreDestroy
+    private void cleanup() {
+        for (SnowpipeRestChannel c : sp_channels.values())
+            c.cleanup();
     }
 
     private String makeKey(String database, String schema, String table) {
@@ -208,58 +217,75 @@ public class SnowpipeRestRepository {
     }
 
     // Metrics Reporting
-    private static ScheduledExecutorService scheduler;
-    private static void startReporter() {
+    private ScheduledExecutorService scheduler;
+    private void startReporter(int INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE) {
         scheduler = Executors.newSingleThreadScheduledExecutor();
-        Runnable task = SnowpipeRestRepository::fetchAndPrintMetrics;
+        Runnable task = new JmxPrinter(INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE); // SnowpipeRestRepository::fetchAndPrintMetrics;
         scheduler.scheduleAtFixedRate(task, 30, 30, TimeUnit.SECONDS);
     }
 
-    private static void fetchAndPrintMetrics() {
-        logger.info("Fetching JMX metrics");
-        try {
-            MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
-            // Latency
-            fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=latency.*", "JMX latency: ");
+    class JmxPrinter implements Runnable {
+        static Logger logger = LoggerFactory.getLogger(JmxPrinter.class);
+        int insertThrottleThresholdInPercentage = -1;
 
-            // Throughput
-            fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=throughput.*", "JMX throughput: ");
-
-            // Blob
-            fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=blob.*", "JMX blob: ");
-
-        } catch (Exception e) {
-            logger.error("Unable to log JMX metrics", e);
+        public JmxPrinter(int INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE) {
+            this.insertThrottleThresholdInPercentage = INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE;
         }
-    }
 
-    private static void fetchAndPrintMetrics(MBeanServer mBeanServer, String queryNameString, String logPrefix) throws Exception {
-        ObjectName queryName = new ObjectName(queryNameString);
-        Set<ObjectName> names = mBeanServer.queryNames(queryName, null);
-        if (names.isEmpty()) {
-            logger.info("No JMX metrics found: " + queryNameString);
+        @Override
+        public void run() {
+            logger.info("Fetching JMX metrics");
+            try {
+                MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
+                // Latency
+                fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=latency.*", "JMX latency: ");
+    
+                // Throughput
+                fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=throughput.*", "JMX throughput: ");
+    
+                // Blob
+                fetchAndPrintMetrics(mBeanServer, "snowflake.ingest.sdk:clientName=SNOWPIPE_REST_*,name=blob.*", "JMX blob: ");
+    
+                // Memory Info
+                MemoryInfoProvider memoryInfoProvider = MemoryInfoProviderFromRuntime.getInstance();
+                long maxMemory = memoryInfoProvider.getMaxMemory();
+                long freeMemoryInBytes = memoryInfoProvider.getFreeMemory();
+                boolean hasLowRuntimeMemory =
+                //     freeMemoryInBytes < insertThrottleThresholdInBytes &&
+                        freeMemoryInBytes * 100 / maxMemory < insertThrottleThresholdInPercentage;
+                logger.info(String.format("JMX memoryInfoProvider: maxMemory=%,d, freeMemoryInBytes=%,d, insertThrottleThresholdInPercentage=%d, hasLowRuntimeMemory=%B", maxMemory, freeMemoryInBytes, insertThrottleThresholdInPercentage, hasLowRuntimeMemory));
+            } catch (Exception e) {
+                logger.error("Unable to log JMX metrics", e);
+            }
         }
-        else {
-            for (ObjectName name: names) {
-                MBeanInfo info = mBeanServer.getMBeanInfo(name);
-                MBeanAttributeInfo[] attrInfo = info.getAttributes();
-                Map<String, Object> attributes = new LinkedHashMap<>();
-                for (MBeanAttributeInfo attr : attrInfo) {
-                    if (attr.isReadable())
-                        attributes.put(attr.getName(), mBeanServer.getAttribute(name, attr.getName()));
-                }
-                // Constructing the key-value pair string dynamically
-                StringBuilder kvPairs = new StringBuilder();
-                kvPairs.append("metric=" + name.getCanonicalName());
-                for (Map.Entry<String, Object> entry : attributes.entrySet()) {
-                    if (kvPairs.length() > 0) {
-                        kvPairs.append(", ");
+    
+        private void fetchAndPrintMetrics(MBeanServer mBeanServer, String queryNameString, String logPrefix) throws Exception {
+            ObjectName queryName = new ObjectName(queryNameString);
+            Set<ObjectName> names = mBeanServer.queryNames(queryName, null);
+            if (names.isEmpty()) {
+                logger.info("No JMX metrics found: " + queryNameString);
+            }
+            else {
+                for (ObjectName name: names) {
+                    MBeanInfo info = mBeanServer.getMBeanInfo(name);
+                    MBeanAttributeInfo[] attrInfo = info.getAttributes();
+                    Map<String, Object> attributes = new LinkedHashMap<>();
+                    for (MBeanAttributeInfo attr : attrInfo) {
+                        if (attr.isReadable())
+                            attributes.put(attr.getName(), mBeanServer.getAttribute(name, attr.getName()));
                     }
-                    kvPairs.append(entry.getKey()).append("=").append(entry.getValue());
+                    // Constructing the key-value pair string dynamically
+                    StringBuilder kvPairs = new StringBuilder();
+                    kvPairs.append("metric=" + name.getCanonicalName());
+                    for (Map.Entry<String, Object> entry : attributes.entrySet()) {
+                        if (kvPairs.length() > 0) {
+                            kvPairs.append(", ");
+                        }
+                        kvPairs.append(entry.getKey()).append("=").append(entry.getValue());
+                    }
+                    logger.info(logPrefix + kvPairs);
                 }
-                logger.info(logPrefix + kvPairs);
             }
         }
     }
-
 }

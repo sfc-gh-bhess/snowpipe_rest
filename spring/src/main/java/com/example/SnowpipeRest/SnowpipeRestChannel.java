@@ -21,7 +21,7 @@ public class SnowpipeRestChannel {
     static Logger logger = LoggerFactory.getLogger(SnowpipeRestChannel.class);
 
     private String key;
-    private SnowflakeStreamingIngestChannel snowpipe_channel;
+    private SnowflakeStreamingIngestChannel snowpipe_channel = null;
     private int insert_count;
     private Map<String,List<Map<String,Object>>> buffer = null;
     private CompletableFuture<Void> purger = null;
@@ -48,7 +48,16 @@ public class SnowpipeRestChannel {
         init();
     }
 
+    public void cleanup() {
+        logger.info(String.format("<%s> Cleaning up", this.key));
+        if (this.snowpipe_channel != null) {
+            logger.info(String.format("<%s> Closing channel", this.key));
+            this.snowpipe_channel.close(true);
+        }
+    }
+
     private void init() {
+        logger.info(String.format("<%s> Opening channel", this.key));
         this.snowpipe_channel = this.client.openChannel(openChannelRequest);
         if (this.buffer == null) {
             this.buffer = new ConcurrentHashMap<String,List<Map<String,Object>>>();
@@ -85,7 +94,7 @@ public class SnowpipeRestChannel {
         int ttoken = last_token;
         List<String> pkeys = this.buffer.keySet().stream().filter(k -> Integer.parseInt(k) <= ttoken).toList();
         if (pkeys.size() > 0) {
-            logger.info(String.format("<%s> Purging from %s: %s", key, key, pkeys));
+            logger.info(String.format("<%s> Purging: %s", key, pkeys));
             for (String k : pkeys) {
                 this.buffer.remove(k);
             }
@@ -93,9 +102,10 @@ public class SnowpipeRestChannel {
     }
 
     private synchronized SnowpipeRestChannel makeChannelValid() {
-        logger.info(String.format("<%s> Making channel valid: %s", key, key));
+        logger.info(String.format("<%s> Making channel valid", key));
         if (this.snowpipe_channel.isValid())
             return this;
+        logger.info(String.format("<%s> Channel is invalid, re-initing and replaying", key));
         init();
         replayBuffer();
         return this;
