@@ -48,6 +48,7 @@ public class SnowpipeRestRepository {
     private SnowflakeStreamingIngestClient snowpipe_client;
     private String suffix = UUID.randomUUID().toString();
     private ConcurrentMap<String,SnowpipeRestChannel> sp_channels = new ConcurrentHashMap<String,SnowpipeRestChannel>();
+    private MemoryInfoProvider memoryInfoProvider = MemoryInfoProviderFromRuntime.getInstance();
 
     @Value("${snowpiperest.batch_size}")
     private int batch_size;
@@ -60,6 +61,15 @@ public class SnowpipeRestRepository {
 
     @Value("${snowpiperest.thread_in_key}")
     private int thread_in_key;
+
+    @Value("${snowpiperest.throttle_threshold_pct}")
+    private int throttle_threshold_pct;
+
+    @Value("${snowpiperest.throttle_delay_millis}")
+    private int throttle_delay_millis;
+
+    @Value("${snowpiperest.throttle_backoff_factor}")
+    private double throttle_backoff_factor;
 
     @Value("${snowflake.url}")
     private String snowflake_url;
@@ -93,12 +103,17 @@ public class SnowpipeRestRepository {
     @Value("${snowpiperest.io_time_cpu_ratio}")
     private long IO_TIME_CPU_RATIO;
 
+    @Value("${snowpiperest.bdec_parquet_compression_algorithm}")
+    private String BDEC_PARQUET_COMPRESSION_ALGORITHM;
+
     public void setParameters(Properties props) {
         logger.info(String.format("Setting Snowpipe Parameters"));
         logger.info(String.format("INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE: %d", this.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE));
         logger.info(String.format("MAX_CLIENT_LAG: %d", this.MAX_CLIENT_LAG));
         logger.info(String.format("MAX_CHANNEL_SIZE_IN_BYTES: %d", this.MAX_CHANNEL_SIZE_IN_BYTES));
         logger.info(String.format("MAX_CHUNK_SIZE_IN_BYTES: %d", this.MAX_CHUNK_SIZE_IN_BYTES));
+        logger.info(String.format("BDEC_PARQUET_COMPRESSION_ALGORITHM: %s", this.BDEC_PARQUET_COMPRESSION_ALGORITHM));
+        props.put(ParameterProvider.BDEC_PARQUET_COMPRESSION_ALGORITHM, this.BDEC_PARQUET_COMPRESSION_ALGORITHM);
         if (this.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE > 0)
             props.put(ParameterProvider.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE, this.INSERT_THROTTLE_THRESHOLD_IN_PERCENTAGE);
         if (this.MAX_CLIENT_LAG > 0)
@@ -114,6 +129,11 @@ public class SnowpipeRestRepository {
             logger.info("Disabling buffering");
         if (this.thread_in_key != 0)
             logger.info("Setting up channel-per-thread");
+        if (this.throttle_threshold_pct >= 0) {
+            logger.info(String.format("Throttle threshold percent: %d", this.throttle_threshold_pct));
+            logger.info(String.format("Initial throttle delay: %d", this.throttle_delay_millis));
+            logger.info(String.format("Throttle backoff factor: %f", this.throttle_backoff_factor));
+        }
     }
     //------------------------------
 
@@ -184,7 +204,38 @@ public class SnowpipeRestRepository {
                                             (this.disable_buffering != 0), (this.thread_in_key == 0)));
     }
 
+    private boolean hasLowRuntimeMemory() {
+        if (this.throttle_threshold_pct < 0)
+            return false;
+        long maxMemory = this.memoryInfoProvider.getMaxMemory();
+        long freeMemoryInBytes = memoryInfoProvider.getFreeMemory();
+        boolean hasLowRuntimeMemory =
+        //     freeMemoryInBytes < insertThrottleThresholdInBytes &&
+                freeMemoryInBytes * 100 / maxMemory < this.throttle_threshold_pct;
+        return hasLowRuntimeMemory;
+    }
+    private void throttleIfNecessary() {
+        int retry = 0;
+        int sleep_ms = this.throttle_delay_millis;
+        int total_sleep = 0;
+        while (hasLowRuntimeMemory()) {
+            try {
+                Thread.sleep(sleep_ms);
+                retry++;
+                total_sleep += sleep_ms;
+                sleep_ms = (int)((double)sleep_ms * this.throttle_backoff_factor);
+            }        
+            catch (InterruptedException e) {
+                logger.info(e.getMessage());
+            }
+        }
+        if (retry > 0) {
+            logger.info(String.format("saveToSnowflake throttled: times=%d, total_ms=%d", retry, total_sleep));
+        }
+    }
+
     public SnowpipeInsertResponse saveToSnowflake(String database, String schema, String table, String body) {
+        throttleIfNecessary();
         // Parse body
         List<Object> rowStrings;
         List<Map<String,Object>> rows;
